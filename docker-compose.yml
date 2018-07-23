@@ -1,0 +1,27 @@
+version: "3.5"
+services:
+  influx-relay:
+   image: mpolatcan/influxdb-relay
+   container_name: influx-relay
+   hostname: influx-relay
+   environment:
+     - SR_ADDR=sr:5050
+   ports:
+     - 9086:9086
+     - 3030:3030
+
+  service-registry:
+    image: mpolatcan/service-registry
+    container_name: sr
+    hostname: sr
+    environment:
+      - SR_HEALTHCHECK_INTERVAL=5s
+    ports:
+      - 5050:5050
+
+  influxdb:
+    image: mpolatcan/influxdb
+    environment:
+      - SR_ADDR=sr:5050
+    ports:
+      - 8086
