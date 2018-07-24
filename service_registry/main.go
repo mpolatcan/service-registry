@@ -13,6 +13,5 @@ func main() {
 
 	http.HandleFunc("/register", registry.RegisterHandler)
 	http.HandleFunc("/services", registry.ServicesHandler)
-	registry.ManageHealthcheckers()
 	log.Fatal(http.ListenAndServe(":" + os.Getenv("SR_PORT"), nil))
 }

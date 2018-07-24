@@ -1,46 +1,65 @@
+/* Written by Mutlu Polatcan
+   23.07.2018
+
+	Simple, publisher-subscriber based service registry for service discovery and dynamic configuration update
+ */
 package core
 
 import (
 	"container/list"
-	"net/http"
-	"encoding/json"
-	"log"
-	"strings"
-	"net/url"
-	"io/ioutil"
-	"fmt"
-	"strconv"
-	"time"
-	"os"
-	"bytes"
 	"sync"
+	"time"
+	"net/http"
+	"strconv"
+	"log"
+	"bytes"
+	"io/ioutil"
+	"net/url"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"os"
 )
 
-// TODO Count failures
-// TODO Updating observers
+// TODO Subscription mechanism
 
 type Registry struct {
 	Services map[string]*list.List
 
 	Observers map[string]*list.List
 
-	HealthcheckerChannels map[string]chan bool
+	HealthCheckerStatus map[string]bool
 
 	FailureCounts map[string]int
 
 	Mutex *sync.Mutex
+
+	FailureThreshold int
+
+	HealthCheckInterval string
+
+	InitialDelay string
 }
 
 func (registry *Registry) InitRegistry()  {
 	registry.Services = make(map[string]*list.List)
 	registry.Observers = make(map[string]*list.List)
-	registry.HealthcheckerChannels = make(map[string]chan bool)
+	registry.HealthCheckerStatus = make(map[string]bool)
 	registry.FailureCounts = make(map[string]int)
 	registry.Mutex = &sync.Mutex{}
+	registry.FailureThreshold, _ = strconv.Atoi(os.Getenv("SR_HEALTHCHECK_FAILURE_THRESHOLD"))
+	registry.HealthCheckInterval = os.Getenv("SR_HEALTHCHECK_INTERVAL")
+	registry.InitialDelay = os.Getenv("SR_HEALTHCHECK_INITIAL_DELAY")
 }
 
 func (registry *Registry) GetServices(serviceName string) *list.List {
 	return registry.Services[serviceName]
+}
+
+func (registry *Registry) DeleteServiceGroup(serviceName string) {
+	if registry.GetServiceCount(serviceName) == 0 {
+		delete(registry.Services, serviceName)
+	}
 }
 
 func (registry *Registry) GetServiceCount(serviceName string) int {
@@ -65,6 +84,10 @@ func (registry *Registry) GetObservers(serviceName string) *list.List {
 	return registry.Observers[serviceName]
 }
 
+func (registry *Registry) DeleteObserverGroup(serviceName string) {
+	delete(registry.Observers, serviceName)
+}
+
 func (registry *Registry) GetObserverCount(serviceName string) int {
 	return registry.GetObservers(serviceName).Len()
 }
@@ -83,14 +106,28 @@ func (registry *Registry) RemoveObserver(serviceName string, observer *list.Elem
 	registry.Observers[serviceName].Remove(observer)
 }
 
-func (registry *Registry) GetHealthcheckerChannel(serviceName string) chan bool {
-	return registry.HealthcheckerChannels[serviceName]
+func (registry *Registry) ChangeHealthCheckerStatus(serviceName string, status bool) {
+	registry.HealthCheckerStatus[serviceName] = status
 }
 
-func (registry *Registry) CreateHealthcheckerChannel(serviceName string) {
-	if registry.HealthcheckerChannels[serviceName] == nil {
-		registry.HealthcheckerChannels[serviceName] = make(chan bool)
-	}
+func (registry *Registry) IsHealthCheckerActivated(serviceName string) bool {
+	return registry.HealthCheckerStatus[serviceName]
+}
+
+func (registry *Registry) GetFailureCount(hostname string) int {
+	return registry.FailureCounts[hostname]
+}
+
+func (registry *Registry) IncrementFailureCount(hostname string) {
+	registry.FailureCounts[hostname]++
+}
+
+func (registry *Registry) ResetFailureCount(hostname string) {
+	registry.FailureCounts[hostname] = 0
+}
+
+func (registry *Registry) DeleteFailureCount(hostname string) {
+	delete(registry.FailureCounts, hostname)
 }
 
 func (registry *Registry) Wait(durationStr string) {
@@ -103,106 +140,54 @@ func (registry *Registry) Wait(durationStr string) {
 	}
 }
 
-func (registry *Registry) CreateHealthchecker(service Service) {
-	if registry.GetHealthcheckerChannel(service.ServiceName) == nil {
-		registry.CreateHealthcheckerChannel(service.ServiceName)
+func (registry *Registry) StartHealthChecker(service Service) {
+	if !registry.IsHealthCheckerActivated(service.ServiceName) {
+		registry.ChangeHealthCheckerStatus(service.ServiceName, true)
 
 		go func() {
-			for {
-				ok := <- registry.GetHealthcheckerChannel(service.ServiceName)
+			registry.Wait(registry.InitialDelay)
 
-				if !ok {
-					log.Printf("Deactivating healthchecker of %s\n", service.ServiceName)
-					break
-				}
-
+			for ; registry.GetServiceCount(service.ServiceName) > 0; {
 				for service := registry.GetServices(service.ServiceName).Front(); service != nil; service = service.Next() {
 					serviceValue := service.Value.(Service)
 
 					response, err := http.Get("http://" + serviceValue.ServiceHostname + ":" + strconv.Itoa(serviceValue.ServicePort) + serviceValue.ServiceHeartbeatEndpoint)
 
 					if err != nil {
+						registry.IncrementFailureCount(serviceValue.ServiceHostname)
+
+						if registry.GetFailureCount(serviceValue.ServiceHostname) > 0 {
+							log.Printf("Retrying %d times for %s-%s\n\n", registry.GetFailureCount(serviceValue.ServiceHostname), serviceValue.ServiceName, serviceValue.ServiceHostname)
+						}
+
 						log.Println(err)
 
-						// TODO Change retry healthcheck
-						go func() {
-							registry.RetryHealthcheck(service)
-						}()
+						if registry.GetFailureCount(serviceValue.ServiceHostname) >= registry.FailureThreshold {
+							log.Printf("Node %s is dead! Removing node %s from registry...\n\n", serviceValue.ServiceHostname, serviceValue.ServiceHostname)
+							registry.RemoveService(serviceValue.ServiceName, service)
+						}
 					} else {
 						status := response.StatusCode
 
 						if status == 204 {
-							log.Printf("Status Code: %d -> Node %s is alive!\n", status, serviceValue.ServiceHostname)
+							registry.ResetFailureCount(serviceValue.ServiceHostname)
+							log.Printf("Status Code: %d -> Node %s is alive!\n\n", status, serviceValue.ServiceHostname)
 						} else {
-							log.Printf("Status Code: %d -> Node %s is dead!\n", status, serviceValue.ServiceHostname)
-							log.Printf("Removing node %s from registry...\n", serviceValue.ServiceHostname)
+							log.Printf("Status Code: %d -> Node %s is dead!\n\n", status, serviceValue.ServiceHostname)
+							log.Printf("Removing node %s from registry...\n\n", serviceValue.ServiceHostname)
 							registry.RemoveService(serviceValue.ServiceName, service)
-							// TODO Delete key if there is no service
 						}
 					}
 				}
+
+				registry.Wait(registry.HealthCheckInterval)
 			}
+
+			log.Printf("Deactivating healthchecker of %s\n\n", service.ServiceName)
+			registry.DeleteServiceGroup(service.ServiceName)
+			registry.ChangeHealthCheckerStatus(service.ServiceName, false)
 		}()
 	}
-}
-
-func (registry *Registry) RetryHealthcheck(service *list.Element) {
-	serviceValue := service.Value.(Service)
-
-	threshold, err := strconv.Atoi(os.Getenv("SR_HEALTHCHECK_FAILURE_THRESHOLD"))
-
-	if err != nil {
-		log.Println(err)
-	}
-
-	success := false
-
-	for try := 0; try < threshold; try++ {
-		log.Printf("Retrying %d times\n", try)
-
-		response, err := http.Get("http://" + serviceValue.ServiceHostname + ":" + strconv.Itoa(serviceValue.ServicePort) + serviceValue.ServiceHeartbeatEndpoint)
-
-		if err != nil {
-			log.Println(err)
-		} else {
-			status := response.StatusCode
-
-			if status == 204 {
-				log.Printf("Status Code: %d -> Node %s is alive!\n", status, serviceValue.ServiceHostname)
-				success = true
-				break
-			}
-		}
-
-		registry.Wait(os.Getenv("SR_HEALTHCHECK_INTERVAL"))
-	}
-
-	if !success {
-		log.Printf("Node %s is dead!\n", serviceValue.ServiceHostname)
-		log.Printf("Removing node %s from registry...\n", serviceValue.ServiceHostname)
-		registry.RemoveService(serviceValue.ServiceName,service)
-	}
-}
-
-func (registry *Registry) ManageHealthcheckers() {
-	go func() {
-		for {
-			for service, serviceList := range registry.Services {
-				if serviceList != nil {
-					if serviceList.Len() > 0 {
-						registry.GetHealthcheckerChannel(service) <- true
-					} else {
-						if registry.GetHealthcheckerChannel(service) != nil {
-							registry.GetHealthcheckerChannel(service) <- false
-							delete(registry.HealthcheckerChannels, service)
-						}
-					}
-				}
-			}
-
-			registry.Wait(os.Getenv("SR_HEALTHCHECK_INTERVAL"))
-		}
-	}()
 }
 
 func (registry *Registry) UpdateObservers(serviceName string) {
@@ -246,7 +231,9 @@ func (registry *Registry) RegisterHandler(w http.ResponseWriter, r *http.Request
 			registry.AllocateServiceList(service.ServiceName)
 			registry.AddService(service.ServiceName, service)
 
-			registry.CreateHealthchecker(service)
+			registry.ResetFailureCount(service.ServiceHostname)
+
+			registry.StartHealthChecker(service)
 
 			registry.UpdateObservers(service.ServiceName)
 			// --------------------------------------------------------------
@@ -321,5 +308,3 @@ func (registry *Registry) ServicesHandler(w http.ResponseWriter, r *http.Request
 		}
 	}
 }
-
-
