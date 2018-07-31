@@ -11,7 +11,6 @@ import (
 // TODO Optional healthcheck mechanism for services
 
 type Service struct {
-	RegistryAddr string
 	ServiceName string
 	ServiceHostname string
 	ServicePort int
@@ -19,16 +18,15 @@ type Service struct {
 }
 
 func (service *Service) StartService(registryAddr string, serviceName string, serviceHostname string, servicePort int, serviceHeartbeatEndpoint string) {
-	service.RegistryAddr = registryAddr
 	service.ServiceName = serviceName
 	service.ServiceHostname = serviceHostname
 	service.ServicePort = servicePort
 	service.ServiceHeartbeatEndpoint = serviceHeartbeatEndpoint
 
-	service.Connect()
+	service.Connect(registryAddr)
 }
 
-func (service *Service) Connect() {
+func (service *Service) Connect(registryAddr string) {
 	log.Println("Connecting to registry...")
 	for {
 		jsonData, err := json.Marshal(map[string]interface{}{"serviceName": service.ServiceName,
@@ -42,12 +40,10 @@ func (service *Service) Connect() {
 			log.Println(string(jsonData))
 		}
 
+		_, err = http.Post("http://"+ registryAddr + "/register?type=service", "application/json", bytes.NewBufferString(string(jsonData)))
 
-		_, err = http.Post("http://"+ service.RegistryAddr +"/register?type=service", "application/json", bytes.NewBufferString(string(jsonData)))
-
-		if err != nil {
-			log.Println(err)
-		} else {
+		if err == nil {
+			log.Println("Connection established with registry!")
 			break
 		}
 	}

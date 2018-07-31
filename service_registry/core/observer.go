@@ -48,9 +48,8 @@ func (observer *Observer) Connect() {
 
 		_, err = http.Post("http://"+ observer.RegistryAddr +"/register?type=observer", "application/json", bytes.NewBufferString(string(jsonData)))
 
-		if err != nil {
-			log.Println(err)
-		} else {
+		if err == nil {
+			log.Println("Connection established with registry!")
 			break
 		}
 	}

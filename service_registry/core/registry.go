@@ -12,16 +12,14 @@ import (
 	"net/http"
 	"strconv"
 	"log"
-	"bytes"
 	"io/ioutil"
 	"net/url"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"os"
+	"bytes"
 )
-
-// TODO Subscription mechanism
 
 type Registry struct {
 	Services map[string]*list.List
@@ -169,6 +167,7 @@ func (registry *Registry) StartHealthChecker(service Service) {
 						if registry.GetFailureCount(serviceValue.ServiceHostname) >= registry.FailureThreshold {
 							log.Printf("Node %s is dead! Removing node %s from registry...\n\n", serviceValue.ServiceHostname, serviceValue.ServiceHostname)
 							registry.RemoveService(serviceValue.ServiceName, service)
+							registry.UpdateObservers(serviceValue.ServiceName)
 						}
 					} else {
 						status := response.StatusCode
@@ -180,6 +179,7 @@ func (registry *Registry) StartHealthChecker(service Service) {
 							log.Printf("Status Code: %d -> Node %s is dead!\n\n", status, serviceValue.ServiceHostname)
 							log.Printf("Removing node %s from registry...\n\n", serviceValue.ServiceHostname)
 							registry.RemoveService(serviceValue.ServiceName, service)
+							registry.UpdateObservers(serviceValue.ServiceName)
 						}
 					}
 				}
@@ -196,22 +196,19 @@ func (registry *Registry) StartHealthChecker(service Service) {
 
 func (registry *Registry) UpdateObservers(serviceName string) {
 	if registry.GetObservers(serviceName) != nil {
-		for observer := registry.GetObservers(serviceName).Front(); observer != nil; observer = observer.Next() {
-			for i := 0; i < registry.FailureThreshold; i++ {
-				observerValue := observer.Value.(Observer)
-				_, err := http.Post("http://" + observerValue.ObserverHostname + ":" + strconv.Itoa(observerValue.ObserverPort) + observerValue.ObserverUpdateEndpoint, "application/text", bytes.NewBufferString("UPDATE!"))
+		go func() {
+			for observer := registry.GetObservers(serviceName).Front(); observer != nil; observer = observer.Next() {
+				// Retry forever
+				for {
+					observerValue := observer.Value.(Observer)
+					_, err := http.Post("http://" + observerValue.ObserverHostname + ":" + strconv.Itoa(observerValue.ObserverPort) + observerValue.ObserverUpdateEndpoint, "application/text", bytes.NewBufferString("UPDATE!"))
 
-				if err != nil {
-					log.Println(err)
-
-					if i == registry.FailureThreshold - 1 {
-						registry.RemoveObserver(serviceName,observer)
+					if err == nil {
+						break
 					}
-				} else {
-					break
 				}
 			}
-		}
+		}()
 	}
 }
 
@@ -236,6 +233,10 @@ func (registry *Registry) RegisterHandler(w http.ResponseWriter, r *http.Request
 			service := Service{}
 			err := json.Unmarshal(data,&service)
 
+			if err != nil {
+				log.Println(err)
+			}
+
 			registry.Mutex.Lock()
 			// --------------------- CRITICAL SECTION ------------------
 			registry.PrintInfo(err, fmt.Sprintf("New service has registered -> %+v\n", service))
@@ -253,6 +254,10 @@ func (registry *Registry) RegisterHandler(w http.ResponseWriter, r *http.Request
 		} else if queryValues.Get("type") == "observer" {
 			observer := Observer{}
 			err := json.Unmarshal(data,&observer)
+
+			if err != nil {
+				log.Println(err)
+			}
 
 			registry.Mutex.Lock()
 			// --------------------- CRITICAL SECTION ------------------
