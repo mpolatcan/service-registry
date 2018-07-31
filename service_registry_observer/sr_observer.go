@@ -2,44 +2,13 @@ package main
 
 import (
 	"net/http"
-	"log"
-	"container/list"
-	"os"
-	"os/exec"
-	"strconv"
-	"github.com/naoina/toml"
 	"io/ioutil"
-	"bytes"
+	"log"
+	"../service_registry/core"
+	"os"
 )
 
-// TODO Sharding logic
-// TODO Query handling
-// TODO Communication with service service_registry-docker
-
-var hostnames = list.New()
-var relayPid = 0
-
-type Service struct {
-	ServiceName string
-	ServiceHostname string
-	ServicePort int
-	ServiceHeartbeatEndpoint string
-}
-
-func updateHandler(w http.ResponseWriter, r *http.Request) {
-	data, err := ioutil.ReadAll(r.Body)
-
-	if err != nil {
-		log.Println(err)
-	} else {
-		if err != nil {
-			log.Println(err)
-		} else {
-			log.Println(string(data))
-		}
-	}
-}
-
+/*
 func updateInfluxDBRelay() {
 	log.Println("Updating configuration and restarting InfluxDB Relay")
 
@@ -107,19 +76,17 @@ func updateInfluxDBRelay() {
 		}
 	}
 }
+*/
 
 func main() {
-	for {
-		_, err := http.Post("http://" + os.Getenv("SR_ADDR") + "/register?type=observer", "application/json",
-			bytes.NewBufferString("{\"observedServices\": \"influxdb\", \"observerHostname\":\"" + os.Getenv("HOSTNAME") + "\", \"observerPort\": 3030, \"observerUpdateEndpoint\": \"/update\"}"))
+	var observer = &core.Observer{}
+	observer.StartObserver(os.Getenv("SR_ADDR"),"influxdb",os.Getenv("HOSTNAME"),3030,"/update", func(r *http.Request) {
+		data, err := ioutil.ReadAll(r.Body)
 
 		if err != nil {
 			log.Println(err)
 		} else {
-			break
+			log.Println(string(data))
 		}
-	}
-
-	http.HandleFunc("/update", updateHandler)
-	log.Fatal(http.ListenAndServe(":3030", nil))
+	})
 }

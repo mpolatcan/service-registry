@@ -41,7 +41,7 @@ type Registry struct {
 	InitialDelay string
 }
 
-func (registry *Registry) InitRegistry()  {
+func (registry *Registry) StartRegistry()  {
 	registry.Services = make(map[string]*list.List)
 	registry.Observers = make(map[string]*list.List)
 	registry.HealthCheckerStatus = make(map[string]bool)
@@ -50,6 +50,10 @@ func (registry *Registry) InitRegistry()  {
 	registry.FailureThreshold, _ = strconv.Atoi(os.Getenv("SR_HEALTHCHECK_FAILURE_THRESHOLD"))
 	registry.HealthCheckInterval = os.Getenv("SR_HEALTHCHECK_INTERVAL")
 	registry.InitialDelay = os.Getenv("SR_HEALTHCHECK_INITIAL_DELAY")
+
+	http.HandleFunc("/register", registry.RegisterHandler)
+	http.HandleFunc("/services", registry.ServicesHandler)
+	log.Fatal(http.ListenAndServe(":" + os.Getenv("SR_PORT"), nil))
 }
 
 func (registry *Registry) GetServices(serviceName string) *list.List {
@@ -193,11 +197,19 @@ func (registry *Registry) StartHealthChecker(service Service) {
 func (registry *Registry) UpdateObservers(serviceName string) {
 	if registry.GetObservers(serviceName) != nil {
 		for observer := registry.GetObservers(serviceName).Front(); observer != nil; observer = observer.Next() {
-			observerValue := observer.Value.(Observer)
-			_, err := http.Post("http://" + observerValue.ObserverHostname + ":" + strconv.Itoa(observerValue.ObserverPort) + observerValue.ObserverUpdateEndpoint, "application/text", bytes.NewBufferString("UPDATE!"))
+			for i := 0; i < registry.FailureThreshold; i++ {
+				observerValue := observer.Value.(Observer)
+				_, err := http.Post("http://" + observerValue.ObserverHostname + ":" + strconv.Itoa(observerValue.ObserverPort) + observerValue.ObserverUpdateEndpoint, "application/text", bytes.NewBufferString("UPDATE!"))
 
-			if err != nil {
-				log.Println(err)
+				if err != nil {
+					log.Println(err)
+
+					if i == registry.FailureThreshold - 1 {
+						registry.RemoveObserver(serviceName,observer)
+					}
+				} else {
+					break
+				}
 			}
 		}
 	}
@@ -307,4 +319,9 @@ func (registry *Registry) ServicesHandler(w http.ResponseWriter, r *http.Request
 			}
 		}
 	}
+}
+
+func (registry *Registry) PingHandler(w http.ResponseWriter, r *http.Request) {
+	// If registry is alive , send
+	w.WriteHeader(200)
 }

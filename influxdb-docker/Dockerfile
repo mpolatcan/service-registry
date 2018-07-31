@@ -11,4 +11,3 @@ RUN chmod +x /sr_service
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ./sr_service && influxd
-
