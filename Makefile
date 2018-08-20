@@ -1,6 +1,6 @@
 .PHONY: server
 server:
-	sudo env GOOS=linux GOARCH=arm go build -o ./influxdb-relay-docker/sr_observer ./service_registry_observer/sr_observer.go ./service_registry_observer/config.go
+	sudo env GOOS=linux GOARCH=arm go build -o ./influxdb-relay-docker/sr_observer ./service_registry_observer/sr_observer.go
 	sudo docker build -t mpolatcan/influxdb-relay ./influxdb-relay-docker/
 
 .PHONY: client

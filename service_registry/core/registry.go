@@ -3,10 +3,14 @@
 
 	Simple, publisher-subscriber based service registry for service discovery and dynamic configuration update
  */
+
+// TODO When new node arrives create replicates databases, measurements etc.
+// TODO Query mechanism
+// TODO Timer and ticker based implementation for healthchecker
+
 package core
 
 import (
-	"container/list"
 	"sync"
 	"time"
 	"net/http"
@@ -22,9 +26,9 @@ import (
 )
 
 type Registry struct {
-	Services map[string]*list.List
+	Services map[string]*List
 
-	Observers map[string]*list.List
+	Observers map[string]*List
 
 	HealthCheckerStatus map[string]bool
 
@@ -40,8 +44,8 @@ type Registry struct {
 }
 
 func (registry *Registry) StartRegistry()  {
-	registry.Services = make(map[string]*list.List)
-	registry.Observers = make(map[string]*list.List)
+	registry.Services = make(map[string]*List)
+	registry.Observers = make(map[string]*List)
 	registry.HealthCheckerStatus = make(map[string]bool)
 	registry.FailureCounts = make(map[string]int)
 	registry.Mutex = &sync.Mutex{}
@@ -54,7 +58,7 @@ func (registry *Registry) StartRegistry()  {
 	log.Fatal(http.ListenAndServe(":" + os.Getenv("SR_PORT"), nil))
 }
 
-func (registry *Registry) GetServices(serviceName string) *list.List {
+func (registry *Registry) GetServices(serviceName string) *List {
 	return registry.Services[serviceName]
 }
 
@@ -70,19 +74,19 @@ func (registry *Registry) GetServiceCount(serviceName string) int {
 
 func (registry *Registry) AllocateServiceList(serviceName string) {
 	if registry.Services[serviceName] == nil {
-		registry.Services[serviceName] = list.New()
+		registry.Services[serviceName] = new(List).Init()
 	}
 }
 
 func (registry *Registry) AddService(serviceName string, service Service) {
-	registry.Services[serviceName].PushBack(service)
+	registry.Services[serviceName].Add(service)
 }
 
-func (registry *Registry) RemoveService(serviceName string, service *list.Element) {
+func (registry *Registry) RemoveService(serviceName string, service Service) {
 	registry.Services[serviceName].Remove(service)
 }
 
-func (registry *Registry) GetObservers(serviceName string) *list.List {
+func (registry *Registry) GetObservers(serviceName string) *List {
 	return registry.Observers[serviceName]
 }
 
@@ -96,15 +100,15 @@ func (registry *Registry) GetObserverCount(serviceName string) int {
 
 func (registry *Registry) AllocateObserverList(serviceName string) {
 	if registry.Observers[serviceName] == nil {
-		registry.Observers[serviceName] = list.New()
+		registry.Observers[serviceName] = new(List).Init()
 	}
 }
 
 func (registry *Registry) AddObserver(serviceName string, observer Observer) {
-	registry.Observers[serviceName].PushBack(observer)
+	registry.Observers[serviceName].Add(observer)
 }
 
-func (registry *Registry) RemoveObserver(serviceName string, observer *list.Element) {
+func (registry *Registry) RemoveObserver(serviceName string, observer Observer) {
 	registry.Observers[serviceName].Remove(observer)
 }
 
@@ -150,10 +154,10 @@ func (registry *Registry) StartHealthChecker(service Service) {
 			registry.Wait(registry.InitialDelay)
 
 			for ; registry.GetServiceCount(service.ServiceName) > 0; {
-				for service := registry.GetServices(service.ServiceName).Front(); service != nil; service = service.Next() {
-					serviceValue := service.Value.(Service)
+				for _, service := range registry.GetServices(service.ServiceName).Values() {
+					serviceValue := service.(Service)
 
-					response, err := http.Get("http://" + serviceValue.ServiceHostname + ":" + strconv.Itoa(serviceValue.ServicePort) + serviceValue.ServiceHeartbeatEndpoint)
+					response, err := http.Get(fmt.Sprintf("http://%s:%d%s",serviceValue.ServiceHostname,serviceValue.ServicePort,serviceValue.ServiceHeartbeatEndpoint))
 
 					if err != nil {
 						registry.IncrementFailureCount(serviceValue.ServiceHostname)
@@ -166,7 +170,7 @@ func (registry *Registry) StartHealthChecker(service Service) {
 
 						if registry.GetFailureCount(serviceValue.ServiceHostname) >= registry.FailureThreshold {
 							log.Printf("Node %s is dead! Removing node %s from registry...\n\n", serviceValue.ServiceHostname, serviceValue.ServiceHostname)
-							registry.RemoveService(serviceValue.ServiceName, service)
+							registry.RemoveService(serviceValue.ServiceName, serviceValue)
 							registry.UpdateObservers(serviceValue.ServiceName)
 						}
 					} else {
@@ -178,7 +182,7 @@ func (registry *Registry) StartHealthChecker(service Service) {
 						} else {
 							log.Printf("Status Code: %d -> Node %s is dead!\n\n", status, serviceValue.ServiceHostname)
 							log.Printf("Removing node %s from registry...\n\n", serviceValue.ServiceHostname)
-							registry.RemoveService(serviceValue.ServiceName, service)
+							registry.RemoveService(serviceValue.ServiceName, serviceValue)
 							registry.UpdateObservers(serviceValue.ServiceName)
 						}
 					}
@@ -197,14 +201,19 @@ func (registry *Registry) StartHealthChecker(service Service) {
 func (registry *Registry) UpdateObservers(serviceName string) {
 	if registry.GetObservers(serviceName) != nil {
 		go func() {
-			for observer := registry.GetObservers(serviceName).Front(); observer != nil; observer = observer.Next() {
-				// Retry forever
-				for {
-					observerValue := observer.Value.(Observer)
-					_, err := http.Post("http://" + observerValue.ObserverHostname + ":" + strconv.Itoa(observerValue.ObserverPort) + observerValue.ObserverUpdateEndpoint, "application/text", bytes.NewBufferString("UPDATE!"))
+			if registry.GetObservers(serviceName) != nil && registry.GetServices(serviceName) != nil {
+				for _, observer := range registry.GetObservers(serviceName).Values() {
+					// Retry forever
+					for {
+						servicesJSON, errJSON := json.Marshal(registry.GetServices(serviceName).Values()); if errJSON != nil { log.Println(errJSON) }
 
-					if err == nil {
-						break
+						observerValue := observer.(Observer)
+
+						_, err := http.Post(fmt.Sprintf("http://%s:%d%s", observerValue.ObserverHostname, observerValue.ObserverPort, observerValue.ObserverUpdateEndpoint), "application/text", bytes.NewBuffer(servicesJSON))
+
+						if err == nil {
+							break
+						}
 					}
 				}
 			}
@@ -242,6 +251,7 @@ func (registry *Registry) RegisterHandler(w http.ResponseWriter, r *http.Request
 			registry.PrintInfo(err, fmt.Sprintf("New service has registered -> %+v\n", service))
 
 			registry.AllocateServiceList(service.ServiceName)
+
 			registry.AddService(service.ServiceName, service)
 
 			registry.ResetFailureCount(service.ServiceHostname)
@@ -267,6 +277,7 @@ func (registry *Registry) RegisterHandler(w http.ResponseWriter, r *http.Request
 
 			for _, service := range observedServices {
 				registry.AllocateObserverList(service)
+
 				registry.AddObserver(service, observer)
 
 				registry.UpdateObservers(service)
@@ -289,7 +300,7 @@ func (registry *Registry) ServicesHandler(w http.ResponseWriter, r *http.Request
 			fmt.Fprintf(w, "service parameter required on query!")
 		} else {
 			requestedServices := strings.Split(queryParamService, ",")
-			foundedServicesMap := make(map[string][]Service)
+			foundedServicesMap := make(map[string][]interface{})
 
 			var success = true
 
@@ -301,17 +312,7 @@ func (registry *Registry) ServicesHandler(w http.ResponseWriter, r *http.Request
 					fmt.Fprintf(w, "There is no service named \"%s\"", requestedService)
 					break
 				} else {
-					foundedServicesMap[requestedService] = make([]Service, foundedServices.Len())
-
-					index := 0
-					for service := foundedServices.Front(); service != nil; service = service.Next() {
-						serviceValue := service.Value.(Service)
-						foundedServicesMap[requestedService][index].ServiceName = serviceValue.ServiceName
-						foundedServicesMap[requestedService][index].ServiceHeartbeatEndpoint = serviceValue.ServiceHeartbeatEndpoint
-						foundedServicesMap[requestedService][index].ServiceHostname = serviceValue.ServiceHostname
-						foundedServicesMap[requestedService][index].ServicePort = serviceValue.ServicePort
-						index++
-					}
+					foundedServicesMap[requestedService] = registry.GetServices(requestedService).Values()
 				}
 			}
 

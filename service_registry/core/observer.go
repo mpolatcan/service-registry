@@ -5,7 +5,7 @@ import (
 	"log"
 	"net/http"
 	"bytes"
-	"strconv"
+	"fmt"
 )
 
 type Observer struct {
@@ -28,7 +28,7 @@ func (observer *Observer) StartObserver(registryAddr string, observedServices st
 	observer.Connect()
 
 	http.HandleFunc(observerUpdateEndpoint, observer.UpdateHandler)
-	log.Println(http.ListenAndServe(":" + strconv.Itoa(observer.ObserverPort), nil))
+	log.Println(http.ListenAndServe(fmt.Sprintf(":%d", observer.ObserverPort), nil))
 }
 
 func (observer *Observer) Connect() {
@@ -42,11 +42,10 @@ func (observer *Observer) Connect() {
 
 		if err != nil {
 			log.Println(err)
-		} else {
-			log.Println(string(jsonData))
 		}
 
-		_, err = http.Post("http://"+ observer.RegistryAddr +"/register?type=observer", "application/json", bytes.NewBufferString(string(jsonData)))
+
+		_, err = http.Post(fmt.Sprintf("http://%s/register?type=observer", observer.RegistryAddr), "application/json", bytes.NewBufferString(string(jsonData)))
 
 		if err == nil {
 			log.Println("Connection established with registry!")

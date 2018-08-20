@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"bytes"
+	"fmt"
 )
 
 // TODO Connection timeout will be added
@@ -36,11 +37,9 @@ func (service *Service) Connect(registryAddr string) {
 
 		if err != nil {
 			log.Println(err)
-		} else {
-			log.Println(string(jsonData))
 		}
 
-		_, err = http.Post("http://"+ registryAddr + "/register?type=service", "application/json", bytes.NewBufferString(string(jsonData)))
+		_, err = http.Post(fmt.Sprintf("http://%s/register?type=service", registryAddr), "application/json", bytes.NewBufferString(string(jsonData)))
 
 		if err == nil {
 			log.Println("Connection established with registry!")
