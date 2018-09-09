@@ -1,0 +1,13 @@
+FROM golang:1.9
+
+ENV SR_PORT="5050"
+ENV SR_HEALTHCHECK_INTERVAL="5s"
+ENV SR_HEALTHCHECK_FAILURE_THRESHOLD=5
+ENV SR_HEALTHCHECK_INITIAL_DELAY="10s"
+
+WORKDIR /
+
+COPY service_registry ./
+RUN chmod +x /service_registry
+
+ENTRYPOINT ["./service_registry"]

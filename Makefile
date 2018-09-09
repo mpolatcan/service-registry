@@ -1,17 +1,17 @@
 .PHONY: server
 server:
-	sudo env GOOS=linux GOARCH=arm go build -o ./influxdb-relay-docker/sr_observer ./service_registry_observer/sr_observer.go
-	sudo docker build -t mpolatcan/influxdb-relay ./influxdb-relay-docker/
+	sudo env GOOS=linux GOARCH=arm go build -o ./docker/influxdb-relay-docker/influxdb_relay_observer ./examples/observers/influxdb_relay_observer.go
+	sudo docker build -t mpolatcan/influxdb-relay ./docker/influxdb-relay-docker/
 
 .PHONY: client
 client:
-	sudo env GOOS=linux GOARCH=arm go build -o ./influxdb-docker/sr_service ./service_registry_service/sr_service.go
-	sudo docker build -t mpolatcan/influxdb ./influxdb-docker/
+	sudo env GOOS=linux GOARCH=arm go build -o ./docker/influxdb-docker/influxdb_service ./examples/services/influxdb_service.go
+	sudo docker build -t mpolatcan/influxdb ./docker/influxdb-docker/
 
 .PHONY: registry
 registry:
-	sudo env GOOS=linux GOARCH=arm go build -o ./service-registry-docker/service_registry ./service_registry/main.go
-	sudo docker build -t mpolatcan/service-registry ./service-registry-docker/
+	sudo env GOOS=linux GOARCH=arm go build -o ./docker/service-registry-docker/service_registry main.go
+	sudo docker build -t mpolatcan/service-registry ./docker/service-registry-docker/
 
 .PHONY: compose
 compose:
